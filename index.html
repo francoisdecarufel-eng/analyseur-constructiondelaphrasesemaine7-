@@ -140,7 +140,7 @@
                     if (!response.ok) throw new Error(`Erreur réseau : ${response.status}`);
 
                     const data = await response.json();
-                    const resultText = data.resultat;
+                    const resultText = data.resultat || data.result;
 
                     if (!resultText) throw new Error("Réponse de l'API vide");
 
@@ -323,7 +323,6 @@
                             ) : (
                                 <span className="target-part">{displayCap}</span>
                             )}
-                            
                             <span>{displayBody}</span>
                         </span>
                     </span>
@@ -527,6 +526,7 @@
 
             const handleAddComplement = () => {
                 const comp = sentenceData.complementLogique;
+                if (!comp) return;
                 const newWords = comp.texte.split(/\s+/).map((text, i) => ({
                     id: `comp_${Date.now()}_${i}`,
                     text: text, original: text, fixed: text, syntaxRole: 'complement'
@@ -652,6 +652,26 @@
                                 <button onClick={() => setReflectionMode(false)} className="bg-teal-500 hover:bg-teal-600 text-white font-black py-4 px-10 rounded-2xl text-xl shadow-lg transition transform hover:scale-105">
                                     C'est compris, on y va !
                                 </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {missingAlertOpen && (
+                        <div className="absolute inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4 fade-in">
+                            <div className="bg-white rounded-3xl p-8 max-w-lg w-full shadow-2xl border-4 border-amber-300 text-center slide-up">
+                                <div className="inline-flex items-center justify-center p-4 bg-amber-100 text-amber-600 rounded-full mb-4">
+                                    <Icon name="alert-triangle" className="w-10 h-10" />
+                                </div>
+                                <h3 className="text-2xl font-black text-slate-800 mb-2">Attention !</h3>
+                                <p className="text-lg text-slate-600 mb-6">{sentenceData.missingExplanation}</p>
+                                <div className="space-y-3">
+                                    <p className="font-bold text-teal-900">Choisis un sujet à ajouter :</p>
+                                    {(sentenceData.suggestions || []).map((sugg, i) => (
+                                        <button key={i} onClick={() => handleApplySuggestion(sugg)} className="w-full py-3 bg-teal-100 hover:bg-teal-600 hover:text-white text-teal-900 rounded-xl font-bold transition">
+                                            + {sugg}
+                                        </button>
+                                    ))}
+                                </div>
                             </div>
                         </div>
                     )}
@@ -785,96 +805,61 @@
                                             </button>
                                             {correctedSentence && (
                                                 <div className="mt-4 p-4 bg-teal-50 border-2 border-teal-200 rounded-2xl text-xl font-extrabold text-teal-950 text-center">
-                                                    « {correctedSentence} »
+                                                    ✨ {correctedSentence}
                                                 </div>
                                             )}
                                         </div>
                                     </div>
                                 )}
+                            </div>
 
-                                {currentStep === 3 && sentenceData?.complementLogique && !addedComplement && (
-                                    <div className="mt-6 p-4 bg-amber-50 border-2 border-amber-200 rounded-2xl text-center max-w-xl">
-                                        <p className="text-amber-900 font-bold mb-2">💡 Idée de complément :</p>
-                                        <p className="text-slate-700 font-medium mb-3">« {sentenceData.complementLogique.texte} » ({sentenceData.complementLogique.explication})</p>
-                                        <button onClick={handleAddComplement} className="bg-amber-500 hover:bg-amber-600 text-white font-bold px-4 py-2 rounded-xl text-sm transition">
-                                            + Ajouter ce complément
+                            {/* Boutons d'étape suivante pour Étapes 1, 2, 3 */}
+                            {currentStep !== 4 && (
+                                <div className="mt-8 flex flex-col items-center gap-4">
+                                    {currentStep === 3 && sentenceData?.complementLogique && !addedComplement && (
+                                        <button onClick={handleAddComplement} className="bg-purple-600 hover:bg-purple-700 text-white font-bold px-6 py-3 rounded-2xl shadow-md transition flex items-center gap-2">
+                                            <Icon name="plus" className="w-5 h-5" /> Ajouter : "{sentenceData.complementLogique.texte}"
                                         </button>
-                                    </div>
-                                )}
-                            </div>
-
-                            <div className="mt-8 flex justify-center shrink-0">
-                                {currentStep < 4 && (
-                                    <button
-                                        onClick={handleNextStep}
-                                        className="bg-teal-600 hover:bg-teal-700 text-white font-black py-4 px-10 rounded-2xl text-xl shadow-xl transition flex items-center gap-3 active:scale-95"
-                                    >
-                                        Étape suivante <Icon name="arrow-right" className="w-6 h-6" />
+                                    )}
+                                    <button onClick={handleNextStep} className="bg-teal-600 hover:bg-teal-700 text-white font-black px-10 py-4 rounded-2xl text-xl shadow-xl transition transform hover:scale-105 flex items-center gap-3">
+                                        Passer à l'étape suivante <Icon name="arrow-right" className="w-6 h-6" />
                                     </button>
-                                )}
-                            </div>
+                                </div>
+                            )}
                         </div>
                     </div>
-
-                    {missingAlertOpen && sentenceData?.missingExplanation && (
-                        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
-                            <div className="bg-white rounded-3xl p-6 max-w-lg w-full border-4 border-amber-400 shadow-2xl">
-                                <div className="flex items-center gap-3 text-amber-600 mb-3">
-                                    <Icon name="alert-triangle" className="w-8 h-8" />
-                                    <h4 className="text-2xl font-black">Attention : Élément manquant</h4>
-                                </div>
-                                <p className="text-lg text-slate-700 font-medium mb-4">{sentenceData.missingExplanation}</p>
-                                {sentenceData.suggestions && (
-                                    <div className="space-y-2 mb-6">
-                                        <p className="font-bold text-sm uppercase text-slate-500">Suggestions de sujet :</p>
-                                        <div className="flex flex-wrap gap-2">
-                                            {sentenceData.suggestions.map((sugg, i) => (
-                                                <button key={i} onClick={() => handleApplySuggestion(sugg)} className="bg-amber-100 hover:bg-amber-200 text-amber-900 font-bold px-3 py-2 rounded-xl text-sm transition">
-                                                    + {sugg}
-                                                </button>
-                                            ))}
-                                        </div>
-                                    </div>
-                                )}
-                                <button onClick={() => setMissingAlertOpen(false)} className="w-full bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold py-2.5 rounded-xl transition">
-                                    Continuer sans modifier
-                                </button>
-                            </div>
-                        </div>
-                    )}
                 </div>
             );
         };
 
         const App = () => {
-            const [sentenceData, setSentenceData] = useState(null);
-            const [activeTab, setActiveTab] = useState('editor');
+            const [currentTab, setCurrentTab] = useState('editor');
+            const [selectedSentence, setSelectedSentence] = useState(null);
 
-            const handleStartAnalysis = (data) => {
-                setSentenceData(data);
-                setActiveTab('analyzer');
+            const handleStartAnalysis = (sentenceData) => {
+                setSelectedSentence(sentenceData);
+                setCurrentTab('analyzer');
+            };
+
+            const handleBackToEditor = () => {
+                setCurrentTab('editor');
             };
 
             return (
-                <div className="h-full flex flex-col">
-                    {activeTab === 'editor' ? (
-                        <EditorTab onStartAnalysis={handleStartAnalysis} />
-                    ) : (
-                        <AnalyzerTab
-                            sentenceData={sentenceData}
-                            onBackToEditor={() => setActiveTab('editor')}
-                        />
-                    )}
-                </div>
+                <ErrorBoundary>
+                    <div className="h-full w-full flex flex-col">
+                        {currentTab === 'editor' ? (
+                            <EditorTab onStartAnalysis={handleStartAnalysis} />
+                        ) : (
+                            <AnalyzerTab sentenceData={selectedSentence} onBackToEditor={handleBackToEditor} />
+                        )}
+                    </div>
+                </ErrorBoundary>
             );
         };
 
         const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(
-            <ErrorBoundary>
-                <App />
-            </ErrorBoundary>
-        );
+        root.render(<App />);
     </script>
 </body>
 </html>
