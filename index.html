@@ -1,46 +1,880 @@
-export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Méthode non autorisée' });
-  }
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Analyseur de Structure Syntaxique</title>
+    
+    <!-- Scripts CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone@7.23.6/babel.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700;900&display=swap" rel="stylesheet">
 
-  try {
-    const { prompt, systemInstruction, isJson } = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-    const API_KEY = process.env.GEMINI_API_KEY;
+    <style>
+        html, body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            background-color: #f0fdfa; /* Teal 50 */
+        }
 
-    if (!API_KEY) {
-      return res.status(500).json({ error: "La clé API GEMINI_API_KEY n'est pas configurée dans Vercel." });
-    }
+        #root {
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+        }
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${API_KEY}`;
+        .fade-in { animation: fadeIn 0.4s ease-out forwards; }
+        .slide-up { animation: slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+        .pulse-attention { animation: pulseAttention 2s infinite; }
+        
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes pulseAttention {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(20, 184, 166, 0.7); }
+            50% { box-shadow: 0 0 0 8px rgba(20, 184, 166, 0); }
+        }
 
-    const payload = {
-      contents: [{ parts: [{ text: prompt }] }]
-    };
+        .target-part {
+            display: inline-block;
+            transition: all 0.3s ease;
+            position: relative;
+            z-index: 10;
+        }
 
-    if (systemInstruction) {
-      payload.systemInstruction = { parts: [{ text: systemInstruction }] };
-    }
+        .hitbox-interactive {
+            cursor: pointer;
+            border-radius: 6px;
+            padding: 2px 6px;
+            margin: -2px -6px;
+            border: 2px dashed #14b8a6;
+            background-color: #ccfbf1;
+        }
+        .hitbox-interactive:hover {
+            background-color: #99f6e4;
+            transform: scale(1.1);
+        }
 
-    if (isJson) {
-      payload.generationConfig = { responseMimeType: "application/json" };
-    }
+        .selected-step1 { 
+            color: #0f766e;
+            font-weight: 900;
+            text-shadow: 0px 2px 4px rgba(15, 118, 110, 0.2);
+        }
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
+        /* Syntax Highlights */
+        .highlight-sujet {
+            background-color: #dbeafe;
+            border-bottom: 4px solid #3b82f6;
+            color: #1e3a8a;
+            border-radius: 4px 4px 0 0;
+            padding: 2px 4px;
+        }
+        .highlight-predicat {
+            background-color: #fee2e2;
+            border-bottom: 4px solid #ef4444;
+            color: #7f1d1d;
+            border-radius: 4px 4px 0 0;
+            padding: 2px 4px;
+        }
+        .highlight-complement {
+            border-radius: 4px 4px 0 0;
+            padding: 2px 4px;
+            animation: fadeIn 0.5s ease-out;
+        }
 
-    const data = await response.json();
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
 
-    if (!data.candidates || !data.candidates[0]?.content?.parts?.[0]?.text) {
-      return res.status(500).json({ error: "Réponse invalide reçue de Gemini", details: data });
-    }
+    <script type="text/babel" data-presets="react">
+        const { useState, useEffect, useRef } = React;
 
-    const resultat = data.candidates[0].content.parts[0].text;
-    return res.status(200).json({ resultat });
+        class ErrorBoundary extends React.Component {
+            constructor(props) {
+                super(props);
+                this.state = { hasError: false, error: null };
+            }
+            static getDerivedStateFromError(error) {
+                return { hasError: true, error };
+            }
+            componentDidCatch(error, errorInfo) {
+                console.error("Erreur de l'application :", error, errorInfo);
+            }
+            render() {
+                if (this.state.hasError) {
+                    return (
+                        <div className="h-full w-full flex flex-col items-center justify-center bg-teal-50 p-8 text-center">
+                            <div className="bg-white p-8 rounded-3xl shadow-xl max-w-lg">
+                                <h1 className="text-3xl font-black text-red-600 mb-4">Aïe ! Une erreur s'est glissée.</h1>
+                                <p className="text-lg text-gray-700 mb-6">L'application a rencontré un problème inattendu, mais rien n'est perdu.</p>
+                                <button onClick={() => this.setState({hasError: false})} className="px-6 py-3 bg-teal-600 text-white rounded-xl font-bold shadow-lg hover:bg-teal-700 transition">
+                                    Essayer de continuer
+                                </button>
+                            </div>
+                        </div>
+                    );
+                }
+                return this.props.children;
+            }
+        }
 
-  } catch (err) {
-    return res.status(500).json({ error: "Erreur serveur lors de la communication avec l'API Gemini." });
-  }
-}
+        const callGemini = async (prompt, systemInstruction = "", isJson = false) => {
+            let retries = 3;
+            let delay = 1000;
+
+            for (let i = 0; i < retries; i++) {
+                try {
+                    const response = await fetch('/api/analyser', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ prompt, systemInstruction, isJson })
+                    });
+
+                    if (!response.ok) throw new Error(`Erreur réseau : ${response.status}`);
+
+                    const data = await response.json();
+                    const resultText = data.resultat;
+
+                    if (!resultText) throw new Error("Réponse de l'API vide");
+
+                    if (isJson) {
+                        const cleanJson = resultText.replace(/```json/gi, '').replace(/```/g, '').trim();
+                        return JSON.parse(cleanJson);
+                    }
+                    return resultText;
+
+                } catch (err) {
+                    if (i === retries - 1) throw err;
+                    await new Promise(res => setTimeout(res, delay));
+                    delay *= 2;
+                }
+            }
+        };
+
+        const Icon = ({ name, className = "w-6 h-6" }) => {
+            const getIconContent = (iconName) => {
+                switch(iconName) {
+                    case 'pen-tool': return <g><path d="M12 19l7-7 3 3-7 7-3-3z"></path><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"></path><path d="M2 2l7.586 7.586"></path><circle cx="11" cy="11" r="2"></circle></g>;
+                    case 'arrow-right': return <g><path d="M5 12h14"></path><path d="M12 5l7 7-7 7"></path></g>;
+                    case 'arrow-left': return <g><path d="M19 12H5"></path><path d="M12 19l-7-7 7-7"></path></g>;
+                    case 'sparkles': return <g><path d="M12 3v18"></path><path d="M3 12h18"></path><path d="M5.636 5.636l12.728 12.728"></path><path d="M18.364 5.636L5.636 18.364"></path></g>;
+                    case 'check-circle': return <g><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><path d="M22 4L12 14.01l-3-3"></path></g>;
+                    case 'lightbulb': return <g><path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.9 1.2 1.5 1.5 2.5"></path><path d="M9 18h6"></path><path d="M10 22h4"></path></g>;
+                    case 'wand': return <g><path d="M15 4V2"></path><path d="M15 16v-2"></path><path d="M8 9h2"></path><path d="M20 9h2"></path><path d="M17.8 11.8l1.4 1.4"></path><path d="M17.8 6.2l1.4-1.4"></path><path d="M12.2 6.2l-1.4-1.4"></path><path d="M12.2 11.8l-1.4 1.4"></path><path d="M2 22l8-8"></path></g>;
+                    case 'plus': return <g><path d="M12 5v14"></path><path d="M5 12h14"></path></g>;
+                    case 'x': return <g><path d="M18 6L6 18"></path><path d="M6 6l12 12"></path></g>;
+                    case 'alert-triangle': return <g><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></g>;
+                    default: return <circle cx="12" cy="12" r="10"></circle>;
+                }
+            };
+            return (
+                <svg className={className} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'inline-block' }}>
+                    {getIconContent(name)}
+                </svg>
+            );
+        };
+
+        const PRESET_SENTENCES = [
+            {
+                title: "Exemple 1 (Phrase complète)",
+                studentText: "Le joueur étoile marque un but spectaculaire",
+                words: [
+                    { id: 0, text: "Le", original: "Le", fixed: "le", syntaxRole: "sujet" },
+                    { id: 1, text: "joueur", original: "joueur", fixed: "joueur", syntaxRole: "sujet" },
+                    { id: 2, text: "étoile", original: "étoile", fixed: "étoile", syntaxRole: "sujet" },
+                    { id: 3, text: "marque", original: "marque", fixed: "marque", syntaxRole: "verbe" },
+                    { id: 4, text: "un", original: "un", fixed: "un", syntaxRole: "gn_predicat" },
+                    { id: 5, text: "but", original: "but", fixed: "but", syntaxRole: "gn_predicat" },
+                    { id: 6, text: "spectaculaire", original: "spectaculaire", fixed: "spectaculaire", syntaxRole: "expansion_predicat" }
+                ],
+                sujetText: "Le joueur étoile",
+                predicatText: "marque un but spectaculaire",
+                complementLogique: { texte: "à la dernière seconde", explication: "Ajout d'un complément de temps qui crée du suspense." },
+                optionsEmbellissement: [
+                    { texte: "extrêmement agile", type: "expansion" },
+                    { texte: "sous les acclamations de la foule", type: "complement" }
+                ],
+                missingElement: "none"
+            },
+            {
+                title: "Exemple 2 (Orthographe & Doublons)",
+                studentText: "Les enfant aim les sitroulle",
+                words: [
+                    { id: 0, text: "Les", original: "Les", fixed: "Les", syntaxRole: "sujet" },
+                    { id: 1, text: "enfant", original: "enfant", fixed: "enfants", syntaxRole: "sujet" },
+                    { id: 2, text: "aim", original: "aim", fixed: "aiment", syntaxRole: "verbe" },
+                    { id: 3, text: "les", original: "les", fixed: "les", syntaxRole: "gn_predicat" },
+                    { id: 4, text: "sitroulle", original: "sitroulle", fixed: "citrouilles", syntaxRole: "gn_predicat" }
+                ],
+                sujetText: "Les enfant",
+                predicatText: "aim les sitroulle",
+                complementLogique: { texte: "charnues et orangées du potager", explication: "Enrichit le groupe du nom sans répéter le mot citrouille." },
+                optionsEmbellissement: [
+                    { texte: "avec un plaisir immense", type: "complement" },
+                    { texte: "fraîchement cueillies", type: "expansion" }
+                ],
+                missingElement: "none"
+            },
+            {
+                title: "Exemple 3 (Sujet manquant)",
+                studentText: "Mangent des patates pour le souper",
+                words: [
+                    { id: 0, text: "Mangent", original: "Mangent", fixed: "mangent", syntaxRole: "verbe" },
+                    { id: 1, text: "des", original: "des", fixed: "des", syntaxRole: "gn_predicat" },
+                    { id: 2, text: "patates", original: "patates", fixed: "patates", syntaxRole: "gn_predicat" },
+                    { id: 3, text: "pour", original: "pour", fixed: "pour", syntaxRole: "complement" },
+                    { id: 4, text: "le", original: "le", fixed: "le", syntaxRole: "complement" },
+                    { id: 5, text: "souper", original: "souper", fixed: "souper", syntaxRole: "complement" }
+                ],
+                sujetText: "",
+                predicatText: "mangent des patates pour le souper",
+                complementLogique: { texte: "avec un appétit de loup", explication: "Ajout d'un complément de manière amusant." },
+                optionsEmbellissement: [
+                    { texte: "sur une grande table en bois", type: "complement" },
+                    { texte: "délicieusement croustillantes", type: "expansion" }
+                ],
+                missingElement: "sujet",
+                missingExplanation: "Il manque le sujet ! On ne sait pas QUI mange les patates pour le souper.",
+                suggestions: ["Les jeunes enfants", "Les lions de la savane", "Les explorateurs affamés"]
+            }
+        ];
+
+        const STEPS_INFO = {
+            1: { 
+                title: "Étape 1 : Délimitation", 
+                instruction: "Touche la première lettre pour la Majuscule et la fin pour le Point.",
+                reflection: "Une phrase, c'est comme un chemin à parcourir. La lettre majuscule donne le signal de départ, et le point indique la ligne d'arrivée !"
+            },
+            2: { 
+                title: "Étape 2 : Éléments essentiels", 
+                instruction: "Trouve et touche le Sujet (qui fait l'action) et le Prédicat (l'action).",
+                reflection: "Toute phrase a besoin d'éléments essentiels. De qui parle-t-on ? (Sujet) Et que dit-on à son propos ? (Prédicat)"
+            },
+            3: { 
+                title: "Étape 3 : Complément logique", 
+                instruction: "Touche le bouton [+] pour ajouter un complément de phrase, si tu le souhaites.",
+                reflection: "Cette phrase a du sens, mais elle manque de précision. Quel complément (où, quand, comment) pourrions-nous ajouter ?"
+            },
+            4: { 
+                title: "Étape 4 : Manipulation et Expansions", 
+                instruction: "Déplace, ajoute ou supprime des groupes de mots, puis génère des tournures chics adaptées à votre contexte !",
+                reflection: "C'est l'heure de jouer avec les blocs de la phrase ! L'IA vous proposera aussi des expressions très riches et soutenues en direct."
+            }
+        };
+
+        const Word = ({ word, isFirstWord, isLastWord, currentStep, selectedStep1, selectedSubject, selectedPredicate, onAction, reflectionMode, isFirstOfGN, isLastOfGN }) => {
+            const flowOrder = [1, 2, 3, 4];
+            const isPassed = (step) => flowOrder.indexOf(currentStep) > flowOrder.indexOf(step);
+
+            const showCap = selectedStep1.includes('cap') || isPassed(1);
+            const showPunc = selectedStep1.includes('punc') || isPassed(1);
+            
+            const displayedText = word.original || word.text || '';
+            
+            let displayCap = displayedText.charAt(0) || '';
+            if (isFirstWord && displayCap) {
+                displayCap = showCap ? displayCap.toUpperCase() : displayCap.toLowerCase();
+            } else if (displayCap) {
+                if (word.isFirst || word.id === 0) displayCap = displayCap.toLowerCase();
+            }
+            
+            const displayBody = displayedText.slice(1);
+
+            const isSujetHighlight = (selectedSubject || isPassed(2)) && word.syntaxRole === 'sujet';
+            const showPredicate = (selectedPredicate || isPassed(2));
+            const isVerbe = showPredicate && word.syntaxRole === 'verbe';
+            const isGN = showPredicate && (word.syntaxRole === 'gn' || word.syntaxRole === 'gn_predicat');
+            const isPredicatPart = showPredicate && (word.syntaxRole === 'verbe' || word.syntaxRole === 'gn_predicat' || word.syntaxRole === 'expansion_predicat' || word.syntaxRole === 'predicat' || word.syntaxRole === 'gn');
+            const isComplementHighlight = false;
+
+            return (
+                <span className="relative inline-flex items-baseline mx-1 transition-colors duration-500" data-id={word.id}>
+                    {isGN && isFirstOfGN && showPredicate && <span className="text-red-600 font-bold mr-1 text-2xl md:text-3xl translate-y-1">[</span>}
+                    <span 
+                        onClick={(e) => { 
+                            if (currentStep === 2 && !reflectionMode) {
+                                e.stopPropagation();
+                                onAction(word, 'syntax'); 
+                            }
+                        }}
+                        className={`inline-flex items-baseline ${currentStep === 2 && !reflectionMode ? 'cursor-pointer hover:bg-slate-200/50 rounded' : ''} 
+                            ${isSujetHighlight ? 'highlight-sujet' : ''} 
+                            ${isComplementHighlight ? 'highlight-complement' : ''}
+                            ${isPredicatPart ? 'highlight-predicat' : ''}
+                        `}
+                    >
+                        <span className={`${isVerbe ? 'underline decoration-red-600 decoration-[3px] underline-offset-4' : ''} inline-flex items-baseline`}>
+                            {isFirstWord ? (
+                                <span 
+                                    onClick={(e) => { 
+                                        if(currentStep === 1 && !reflectionMode) { e.stopPropagation(); onAction(word, 'cap'); } 
+                                    }}
+                                    className={`target-part ${currentStep === 1 && !reflectionMode && !showCap ? 'hitbox-interactive pulse-attention' : ''} ${showCap ? 'selected-step1' : ''}`}
+                                >
+                                    {displayCap}
+                                </span>
+                            ) : (
+                                <span className="target-part">{displayCap}</span>
+                            )}
+                            
+                            <span>{displayBody}</span>
+                        </span>
+                    </span>
+                    {isGN && isLastOfGN && showPredicate && <span className="text-red-600 font-bold ml-1 text-2xl md:text-3xl translate-y-1">]</span>}
+
+                    {isLastWord && (
+                        <span 
+                            onClick={(e) => { 
+                                if(currentStep === 1 && !reflectionMode) { e.stopPropagation(); onAction(word, 'punc'); }
+                            }}
+                            className={`target-part ml-1 text-4xl leading-[0] translate-y-1 ${currentStep === 1 && !reflectionMode && !showPunc ? 'hitbox-interactive pulse-attention px-3' : ''} ${showPunc ? 'selected-step1' : ''}`}
+                        >
+                            {showPunc ? "." : (currentStep === 1 ? " " : "")}
+                        </span>
+                    )}
+                </span>
+            );
+        };
+
+        const EditorTab = ({ onStartAnalysis }) => {
+            const [customText, setCustomText] = useState("");
+            const [isAnalyzing, setIsAnalyzing] = useState(false);
+
+            const handleCustomSubmit = async (e) => {
+                e.preventDefault();
+                if (!customText.trim()) return;
+                setIsAnalyzing(true);
+
+                try {
+                    const prompt = `Analyse cette phrase d'élève : "${customText}".
+                    Consignes STRICTES basées sur la grammaire du 2e cycle du primaire (Québec) :
+                    1. Orthographe : Si l'élève a fait des fautes d'orthographe (ex: "sitroulle", "aim"), reconnais le mot visé et mets la version corrigée dans 'fixed'.
+                    2. Analyse syntaxique exacte :
+                       - SUJET : Constituant obligatoire. Indique de qui ou quoi on parle. Peut être encadré par "C'est... qui" ou "Ce sont... qui".
+                       - PRÉDICAT : Contient le verbe conjugué ET tous les compléments directs/indirects non effaçables.
+                       - COMPLÉMENT DE PHRASE (CP) : Facultatif. Peut être effacé et déplacé.
+                    3. DÉCOUPAGE GRANULAIRE POUR LA MANIPULATION (Étape 4) :
+                       Utilise ces rôles syntaxiques EXACTS : "sujet", "verbe", "gn_predicat", "expansion_predicat", "complement".
+                    
+                    Retourne un JSON structuré avec :
+                    - "tokens": tableau de TOUS les mots { "text": string, "fixed": string, "syntaxRole": "sujet" | "verbe" | "gn_predicat" | "expansion_predicat" | "complement" }
+                    - "missingElement": "sujet" | "none"
+                    - "missingExplanation": explication claire si manque de sujet, sinon null
+                    - "suggestions": tableau de 3 suggestions de sujet si manquant, sinon null
+                    - "complementLogique": un complément ou une expansion chic avec { "texte": string, "explication": string }
+                    - "optionsEmbellissement": tableau de 2 objets { "texte": string, "type": "expansion" | "complement" }`;
+
+                    const sysInst = "Tu es un linguiste expert en pédagogie du 2e cycle du primaire au Québec. Tu maîtrises parfaitement les manipulations syntaxiques d'encadrement, d'effacement et de déplacement.";
+                    const analysisResult = await callGemini(prompt, sysInst, true);
+
+                    const tokens = analysisResult.tokens || customText.trim().split(/\s+/).map(t => ({ text: t, fixed: t, syntaxRole: "gn" }));
+
+                    let mockWords = tokens.map((w, idx, arr) => ({
+                        id: idx,
+                        text: w.text,
+                        original: w.text,
+                        fixed: w.fixed || w.text,
+                        isFirst: idx === 0,
+                        isLast: idx === arr.length - 1,
+                        syntaxRole: w.syntaxRole || (idx === 0 ? "sujet" : "gn")
+                    }));
+
+                    const newSentenceData = {
+                        title: "Phrase personnalisée",
+                        studentText: customText,
+                        words: mockWords,
+                        complementLogique: analysisResult.complementLogique || { texte: "charnues et orangées du potager", explication: "Enrichit le groupe du nom." },
+                        optionsEmbellissement: analysisResult.optionsEmbellissement || [],
+                        missingElement: analysisResult.missingElement || "none",
+                        missingExplanation: analysisResult.missingExplanation || null,
+                        suggestions: analysisResult.suggestions || null
+                    };
+
+                    onStartAnalysis(newSentenceData);
+                } catch (err) {
+                    console.error("Erreur d'analyse :", err);
+                    const tokens = customText.trim().split(/\s+/);
+                    let mockWords = tokens.map((w, idx) => ({
+                        id: idx, text: w, original: w, fixed: w, syntaxRole: idx === 0 ? "sujet" : (idx === 1 ? "verbe" : "gn")
+                    }));
+                    onStartAnalysis({
+                        title: "Phrase personnalisée", studentText: customText, words: mockWords,
+                        complementLogique: { texte: "avec une grande joie", explication: "Enrichit la phrase." },
+                        optionsEmbellissement: [{ texte: "magnifiquement colorées", type: "expansion" }],
+                        missingElement: "none"
+                    });
+                } finally {
+                    setIsAnalyzing(false);
+                }
+            };
+
+            return (
+                <div className="w-full h-full overflow-y-auto p-4 md:p-8 pb-24">
+                    <div className="max-w-4xl mx-auto fade-in space-y-8">
+                        <div className="bg-white rounded-3xl p-6 lg:p-10 shadow-xl border border-teal-100 text-center">
+                            <div className="inline-flex p-3 bg-teal-100 text-teal-800 rounded-2xl mb-4 font-black">
+                                <Icon name="pen-tool" className="w-8 h-8 mr-2 inline-block align-middle" /> 
+                                Analyseur de Structure Syntaxique
+                            </div>
+                            <h2 className="text-3xl lg:text-4xl font-black text-teal-900 mb-4 tracking-tight">
+                                Saisissez une phrase à analyser
+                            </h2>
+                            <p className="text-lg text-gray-600 mb-8 font-medium">
+                                Entrez une phrase simple pour analyser sa structure, identifier ses blocs et l'enrichir avec des expressions chics !
+                            </p>
+
+                            <form onSubmit={handleCustomSubmit} className="mb-10 text-left bg-slate-50 p-6 rounded-2xl border-2 border-teal-100 shadow-inner">
+                                <label className="block text-teal-950 font-bold text-lg mb-2">
+                                    ✍️ Phrase à analyser :
+                                </label>
+                                <input 
+                                    type="text"
+                                    value={customText}
+                                    onChange={(e) => setCustomText(e.target.value)}
+                                    placeholder="Ex: Le garçon mange une pomme"
+                                    className="w-full text-xl p-4 rounded-xl border-2 border-teal-300 focus:border-teal-600 focus:outline-none bg-white font-medium shadow-sm mb-4"
+                                />
+                                <button 
+                                    type="submit"
+                                    disabled={!customText.trim() || isAnalyzing}
+                                    className={`w-full py-4 rounded-xl text-xl font-black transition flex items-center justify-center gap-3 ${
+                                        (customText.trim() && !isAnalyzing) ? 'bg-teal-600 hover:bg-teal-700 text-white shadow-lg active:scale-95' : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                                    }`}
+                                >
+                                    {isAnalyzing ? (
+                                        <span className="flex items-center gap-2">
+                                            <Icon name="sparkles" className="w-6 h-6 animate-spin" /> Analyse intelligente en cours...
+                                        </span>
+                                    ) : (
+                                        <span className="flex items-center gap-2">Lancer l'analyse structurelle <Icon name="arrow-right" className="w-6 h-6" /></span>
+                                    )}
+                                </button>
+                            </form>
+
+                            <div className="text-left border-t-2 border-gray-100 pt-6">
+                                <h3 className="font-extrabold text-xl text-teal-900 mb-4">
+                                    Ou choisissez un exemple prêt :
+                                </h3>
+                                <div className="grid grid-cols-1 gap-4">
+                                    {PRESET_SENTENCES.map((preset, idx) => (
+                                        <div key={idx} onClick={() => onStartAnalysis(preset)} className="p-5 rounded-2xl border-2 border-teal-100 hover:border-teal-500 hover:bg-teal-50 cursor-pointer transition flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white shadow-sm">
+                                            <div>
+                                                <h4 className="font-extrabold text-lg text-teal-900">{preset.title}</h4>
+                                                <p className="text-xl font-bold text-slate-600 mt-1">« {preset.studentText} »</p>
+                                            </div>
+                                            <button className="bg-teal-100 text-teal-800 hover:bg-teal-600 hover:text-white px-5 py-2.5 rounded-xl font-extrabold transition shrink-0">Lancer</button>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const AnalyzerTab = ({ sentenceData, onBackToEditor }) => {
+            const [currentStep, setCurrentStep] = useState(1);
+            const [currentWords, setCurrentWords] = useState([]);
+            const [selectedStep1, setSelectedStep1] = useState([]); 
+            const [selectedSubject, setSelectedSubject] = useState(false);
+            const [selectedPredicate, setSelectedPredicate] = useState(false);
+            const [reflectionMode, setReflectionMode] = useState(true);
+            const [chunks, setChunks] = useState([]);
+            const [availableOptions, setAvailableOptions] = useState([]);
+            const [customChunkText, setCustomChunkText] = useState("");
+            const [isGeneratingChic, setIsGeneratingChic] = useState(false);
+            const [isCorrecting, setIsCorrecting] = useState(false);
+            const [correctedSentence, setCorrectedSentence] = useState("");
+            const [missingAlertOpen, setMissingAlertOpen] = useState(false);
+            const [addedComplement, setAddedComplement] = useState(false);
+
+            useEffect(() => {
+                if (sentenceData) {
+                    setCurrentWords(sentenceData.words);
+                    if (sentenceData.missingElement === 'sujet') {
+                        setMissingAlertOpen(true);
+                    }
+                }
+            }, [sentenceData]);
+
+            const handleWordAction = (word, actionType) => {
+                if (actionType === 'cap') {
+                    if (!selectedStep1.includes('cap')) setSelectedStep1([...selectedStep1, 'cap']);
+                } else if (actionType === 'punc') {
+                    if (!selectedStep1.includes('punc')) setSelectedStep1([...selectedStep1, 'punc']);
+                } else if (actionType === 'syntax') {
+                    if (word.syntaxRole === 'sujet') setSelectedSubject(true);
+                    if (word.syntaxRole === 'verbe' || word.syntaxRole === 'predicat' || word.syntaxRole === 'gn') setSelectedPredicate(true);
+                }
+            };
+
+            const handleApplySuggestion = (sugg) => {
+                const newWords = sugg.split(/\s+/).map((text, i) => ({
+                    id: `sugg_${Date.now()}_${i}`,
+                    text: text, original: text, fixed: text, syntaxRole: 'sujet'
+                }));
+                setCurrentWords([...newWords, ...currentWords]);
+                setMissingAlertOpen(false);
+            };
+
+            const handleAddComplement = () => {
+                const comp = sentenceData.complementLogique;
+                const newWords = comp.texte.split(/\s+/).map((text, i) => ({
+                    id: `comp_${Date.now()}_${i}`,
+                    text: text, original: text, fixed: text, syntaxRole: 'complement'
+                }));
+                setCurrentWords([...currentWords, ...newWords]);
+                setAddedComplement(true);
+            };
+
+            const handleNextStep = () => {
+                if (currentStep === 1) setSelectedStep1(['cap', 'punc']);
+                if (currentStep === 2) { setSelectedSubject(true); setSelectedPredicate(true); }
+
+                if (currentStep < 4) {
+                    const nextStep = currentStep + 1;
+                    setCurrentStep(nextStep);
+                    setReflectionMode(true);
+                    
+                    if (nextStep === 4) {
+                        const newChunks = [];
+                        let currentRole = null;
+                        let currentChunkWords = [];
+                        
+                        currentWords.forEach((w) => {
+                            let role = w.syntaxRole || 'gn';
+                            if (role !== currentRole && currentChunkWords.length > 0) {
+                                newChunks.push({ 
+                                    id: `chunk_${newChunks.length}`, 
+                                    role: currentRole, 
+                                    words: currentChunkWords, 
+                                    removable: true 
+                                });
+                                currentChunkWords = [];
+                            }
+                            currentRole = role;
+                            currentChunkWords.push(w);
+                        });
+                        if (currentChunkWords.length > 0) {
+                            newChunks.push({ 
+                                id: `chunk_${newChunks.length}`, 
+                                role: currentRole, 
+                                words: currentChunkWords, 
+                                removable: true 
+                            });
+                        }
+                        setChunks(newChunks);
+                        setAvailableOptions(sentenceData?.optionsEmbellissement || []);
+                    }
+                }
+            };
+
+            const moveChunk = (index, direction) => {
+                const newChunks = [...chunks];
+                const temp = newChunks[index];
+                newChunks[index] = newChunks[index + direction];
+                newChunks[index + direction] = temp;
+                setChunks(newChunks);
+            };
+
+            const removeChunk = (index) => {
+                const newChunks = [...chunks];
+                newChunks.splice(index, 1);
+                setChunks(newChunks);
+            };
+
+            const handleAddOption = (opt) => {
+                const words = opt.texte.trim().split(/\s+/).map((text, i) => ({
+                    id: `opt_${Date.now()}_${i}`, text: text, original: text, fixed: text, syntaxRole: opt.type
+                }));
+                const newChunk = { id: `chunk_opt_${Date.now()}`, role: opt.type, words: words, removable: true };
+                setChunks([...chunks, newChunk]);
+                setAvailableOptions(availableOptions.filter(o => o !== opt));
+            };
+
+            const handleGenerateChicChunk = async () => {
+                setIsGeneratingChic(true);
+                try {
+                    const prompt = `L'élève veut ajouter l'idée : "${customChunkText}". Transforme cela en UN SEUL groupe de mots (expansion ou complément) très élégant, poétique ou chic. Renvoie uniquement le texte généré, sans guillemets ni explications.`;
+                    const result = await callGemini(prompt, "", false);
+                    const newChunk = { 
+                        id: `chunk_chic_${Date.now()}`, 
+                        role: 'expansion', 
+                        words: result.trim().split(/\s+/).map((text, i) => ({
+                            id: `chic_${Date.now()}_${i}`, text: text, original: text, fixed: text, syntaxRole: 'expansion'
+                        })),
+                        removable: true 
+                    };
+                    setChunks([...chunks, newChunk]);
+                    setCustomChunkText("");
+                } catch (error) {
+                    console.error(error);
+                } finally {
+                    setIsGeneratingChic(false);
+                }
+            };
+
+            const handleProfessionalCorrection = async () => {
+                setIsCorrecting(true);
+                const sentence = chunks.map(c => c.words.map(w => w.fixed || w.text).join(' ')).join(' ');
+                try {
+                    const prompt = `Corrige parfaitement cette phrase (orthographe, accords, grammaire) sans changer les mots. Met la majuscule et le point final : "${sentence}". Renvoie uniquement la phrase corrigée finale, sans rien d'autre.`;
+                    const result = await callGemini(prompt, "", false);
+                    setCorrectedSentence(result.trim());
+                } catch (error) {
+                    console.error(error);
+                    setCorrectedSentence(sentence + " (Erreur de correction)");
+                } finally {
+                    setIsCorrecting(false);
+                }
+            };
+
+            return (
+                <div className="flex-1 flex flex-col w-full h-full relative">
+                    {reflectionMode && (
+                        <div className="absolute inset-0 z-40 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 fade-in">
+                            <div className="bg-white rounded-3xl p-8 max-w-2xl w-full shadow-2xl border-4 border-teal-300 text-center slide-up">
+                                <div className="inline-flex items-center justify-center p-4 bg-teal-100 text-teal-600 rounded-full mb-6">
+                                    <Icon name="lightbulb" className="w-12 h-12" />
+                                </div>
+                                <h3 className="text-3xl font-black text-slate-800 mb-4">Minute de réflexion</h3>
+                                <p className="text-xl md:text-2xl text-slate-600 font-medium leading-relaxed mb-8">
+                                    {STEPS_INFO[currentStep]?.reflection}
+                                </p>
+                                <button onClick={() => setReflectionMode(false)} className="bg-teal-500 hover:bg-teal-600 text-white font-black py-4 px-10 rounded-2xl text-xl shadow-lg transition transform hover:scale-105">
+                                    C'est compris, on y va !
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="bg-white px-4 py-3 shadow-sm z-10 flex flex-col sm:flex-row items-center justify-between border-b-2 border-teal-100 shrink-0 gap-2">
+                        <button onClick={onBackToEditor} className="text-teal-700 hover:text-teal-900 font-extrabold flex items-center gap-2 bg-teal-50 px-4 py-2 rounded-xl border border-teal-100">
+                            <Icon name="arrow-left" className="w-5 h-5" /> Modifier la phrase
+                        </button>
+                        <div className="flex gap-2 overflow-x-auto max-w-full pb-1 px-2 no-scrollbar">
+                            {[1, 2, 3, 4].map((step) => (
+                                <div key={step} className={`flex items-center justify-center px-4 py-2 rounded-xl font-extrabold text-sm shadow-sm transition-all shrink-0 ${currentStep === step ? 'bg-teal-600 text-white scale-105 ring-4 ring-teal-200' : 'bg-gray-100 text-gray-600'}`}>
+                                    Étape {step}
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto p-4 sm:p-6 md:p-8 relative">
+                        <div className="w-full max-w-5xl mx-auto min-h-full flex flex-col justify-center pb-12 pt-4">
+                            <div className="text-center mb-6 md:mb-8 shrink-0">
+                                <span className="inline-block bg-teal-100 text-teal-900 font-black px-4 py-1.5 rounded-full text-sm uppercase tracking-wider mb-2 shadow-sm">
+                                    {STEPS_INFO[currentStep]?.title}
+                                </span>
+                                <p className="text-xl sm:text-2xl text-slate-700 font-medium bg-white/80 py-2 px-6 rounded-2xl inline-block shadow-sm">
+                                    {STEPS_INFO[currentStep]?.instruction}
+                                </p>
+                            </div>
+
+                            <div className="bg-white rounded-[2.5rem] shadow-2xl p-6 sm:p-10 md:p-16 border-4 border-teal-50 flex flex-col justify-center items-center relative z-0 overflow-hidden w-full min-h-[250px]">
+                                {currentStep !== 4 ? (
+                                    <div className="text-3xl sm:text-4xl md:text-5xl font-black text-slate-800 tracking-wide text-center leading-relaxed">
+                                        {currentWords.map((word, index) => {
+                                            const isGN = (word.syntaxRole === 'gn' || word.syntaxRole === 'gn_predicat');
+                                            const isFirstOfGN = isGN && (index === 0 || !(currentWords[index - 1].syntaxRole === 'gn' || currentWords[index - 1].syntaxRole === 'gn_predicat'));
+                                            const isLastOfGN = isGN && (index === currentWords.length - 1 || !(currentWords[index + 1].syntaxRole === 'gn' || currentWords[index + 1].syntaxRole === 'gn_predicat'));
+
+                                            return (
+                                                <Word
+                                                    key={word.id || index}
+                                                    word={word}
+                                                    isFirstWord={index === 0}
+                                                    isLastWord={index === currentWords.length - 1}
+                                                    currentStep={currentStep}
+                                                    selectedStep1={selectedStep1}
+                                                    selectedSubject={selectedSubject}
+                                                    selectedPredicate={selectedPredicate}
+                                                    onAction={handleWordAction}
+                                                    reflectionMode={reflectionMode}
+                                                    isFirstOfGN={isFirstOfGN}
+                                                    isLastOfGN={isLastOfGN}
+                                                />
+                                            );
+                                        })}
+                                    </div>
+                                ) : (
+                                    <div className="flex flex-col items-center gap-8 fade-in w-full">
+                                        <div className="flex flex-wrap justify-center items-center gap-y-12 gap-x-4 bg-slate-50 p-6 pt-10 rounded-3xl border-2 border-slate-200 min-h-[140px] w-full mt-4">
+                                            {chunks.map((chunk, index) => {
+                                                let colorClass = "bg-gray-100 border-gray-300 text-gray-700";
+                                                let label = "Groupe";
+                                                
+                                                if (chunk.role === 'sujet') { colorClass = "bg-blue-100 border-blue-400 text-blue-900"; label = "Sujet"; }
+                                                if (chunk.role === 'verbe') { colorClass = "bg-amber-100 border-amber-500 text-amber-950 font-black"; label = "Verbe (Prédicat)"; }
+                                                if (chunk.role === 'gn' || chunk.role === 'gn_predicat') { colorClass = "bg-orange-100 border-orange-400 text-orange-900"; label = "Groupe du Nom (GN)"; }
+                                                if (chunk.role === 'expansion' || chunk.role === 'expansion_predicat') { colorClass = "bg-purple-100 border-purple-400 text-purple-900"; label = "Expansion (du GN / Verbe)"; }
+                                                if (chunk.role === 'complement') { colorClass = "bg-green-100 border-green-400 text-green-900"; label = "Complément de phrase"; }
+
+                                                return (
+                                                    <div key={chunk.id} className={`flex items-center px-3 py-2 rounded-2xl border-2 shadow-sm ${colorClass} relative group`}>
+                                                        <span className="absolute -top-3 left-3 bg-white px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider border shadow-xs">
+                                                            {label}
+                                                        </span>
+                                                        <button onClick={() => moveChunk(index, -1)} disabled={index === 0} className="p-1 hover:bg-black/10 rounded-lg disabled:opacity-20 mr-1" title="Déplacer à gauche">
+                                                            <Icon name="arrow-left" className="w-4 h-4" />
+                                                        </button>
+                                                        <span className="mx-2 text-lg md:text-xl font-bold">
+                                                            {chunk.words.map(w => w.fixed || w.text || w.original).join(' ')}
+                                                        </span>
+                                                        <button onClick={() => moveChunk(index, 1)} disabled={index === chunks.length - 1} className="p-1 hover:bg-black/10 rounded-lg disabled:opacity-20 ml-1" title="Déplacer à droite">
+                                                            <Icon name="arrow-right" className="w-4 h-4" />
+                                                        </button>
+                                                        {chunk.removable && (
+                                                            <button onClick={() => removeChunk(index)} className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 border border-white hover:bg-red-700 transition shadow" title="Supprimer l'étiquette">
+                                                                <Icon name="x" className="w-3.5 h-3.5" />
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+
+                                        {availableOptions.length > 0 && (
+                                            <div className="w-full text-center border-t-2 border-teal-100 pt-6">
+                                                <h4 className="text-sm font-bold text-slate-500 uppercase tracking-widest mb-4">Options d'embellissement suggérées</h4>
+                                                <div className="flex flex-wrap justify-center gap-3">
+                                                    {availableOptions.map((opt, idx) => (
+                                                        <button key={idx} onClick={() => handleAddOption(opt)} className="bg-purple-50 text-purple-800 border-2 border-purple-200 px-4 py-2 rounded-xl font-bold flex items-center gap-2 hover:bg-purple-100 transition shadow-sm hover:scale-105">
+                                                            <Icon name="plus" className="w-4 h-4" /> {opt.texte}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        <div className="w-full flex flex-col md:flex-row gap-3 mt-4">
+                                            <input
+                                                type="text"
+                                                value={customChunkText}
+                                                onChange={(e) => setCustomChunkText(e.target.value)}
+                                                placeholder="Ajouter une idée chic (ex: pendant la nuit)..."
+                                                className="flex-1 p-3 rounded-xl border-2 border-purple-200 focus:border-purple-500 focus:outline-none font-medium"
+                                            />
+                                            <button
+                                                onClick={handleGenerateChicChunk}
+                                                disabled={!customChunkText.trim() || isGeneratingChic}
+                                                className="bg-purple-600 hover:bg-purple-700 disabled:bg-gray-300 text-white font-bold px-5 py-3 rounded-xl flex items-center justify-center gap-2 transition"
+                                            >
+                                                <Icon name="wand" className="w-5 h-5" />
+                                                {isGeneratingChic ? "Création..." : "Générer un bloc chic"}
+                                            </button>
+                                        </div>
+
+                                        <div className="w-full border-t-2 border-teal-100 pt-6 mt-2 flex flex-col items-center">
+                                            <button
+                                                onClick={handleProfessionalCorrection}
+                                                disabled={isCorrecting}
+                                                className="bg-teal-600 hover:bg-teal-700 text-white font-black py-3 px-8 rounded-xl text-lg shadow-md transition flex items-center gap-2"
+                                            >
+                                                <Icon name="sparkles" className="w-5 h-5" />
+                                                {isCorrecting ? "Correction..." : "Vérifier la phrase finale"}
+                                            </button>
+                                            {correctedSentence && (
+                                                <div className="mt-4 p-4 bg-teal-50 border-2 border-teal-200 rounded-2xl text-xl font-extrabold text-teal-950 text-center">
+                                                    « {correctedSentence} »
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {currentStep === 3 && sentenceData?.complementLogique && !addedComplement && (
+                                    <div className="mt-6 p-4 bg-amber-50 border-2 border-amber-200 rounded-2xl text-center max-w-xl">
+                                        <p className="text-amber-900 font-bold mb-2">💡 Idée de complément :</p>
+                                        <p className="text-slate-700 font-medium mb-3">« {sentenceData.complementLogique.texte} » ({sentenceData.complementLogique.explication})</p>
+                                        <button onClick={handleAddComplement} className="bg-amber-500 hover:bg-amber-600 text-white font-bold px-4 py-2 rounded-xl text-sm transition">
+                                            + Ajouter ce complément
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="mt-8 flex justify-center shrink-0">
+                                {currentStep < 4 && (
+                                    <button
+                                        onClick={handleNextStep}
+                                        className="bg-teal-600 hover:bg-teal-700 text-white font-black py-4 px-10 rounded-2xl text-xl shadow-xl transition flex items-center gap-3 active:scale-95"
+                                    >
+                                        Étape suivante <Icon name="arrow-right" className="w-6 h-6" />
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    {missingAlertOpen && sentenceData?.missingExplanation && (
+                        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
+                            <div className="bg-white rounded-3xl p-6 max-w-lg w-full border-4 border-amber-400 shadow-2xl">
+                                <div className="flex items-center gap-3 text-amber-600 mb-3">
+                                    <Icon name="alert-triangle" className="w-8 h-8" />
+                                    <h4 className="text-2xl font-black">Attention : Élément manquant</h4>
+                                </div>
+                                <p className="text-lg text-slate-700 font-medium mb-4">{sentenceData.missingExplanation}</p>
+                                {sentenceData.suggestions && (
+                                    <div className="space-y-2 mb-6">
+                                        <p className="font-bold text-sm uppercase text-slate-500">Suggestions de sujet :</p>
+                                        <div className="flex flex-wrap gap-2">
+                                            {sentenceData.suggestions.map((sugg, i) => (
+                                                <button key={i} onClick={() => handleApplySuggestion(sugg)} className="bg-amber-100 hover:bg-amber-200 text-amber-900 font-bold px-3 py-2 rounded-xl text-sm transition">
+                                                    + {sugg}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                                <button onClick={() => setMissingAlertOpen(false)} className="w-full bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold py-2.5 rounded-xl transition">
+                                    Continuer sans modifier
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const App = () => {
+            const [sentenceData, setSentenceData] = useState(null);
+            const [activeTab, setActiveTab] = useState('editor');
+
+            const handleStartAnalysis = (data) => {
+                setSentenceData(data);
+                setActiveTab('analyzer');
+            };
+
+            return (
+                <div className="h-full flex flex-col">
+                    {activeTab === 'editor' ? (
+                        <EditorTab onStartAnalysis={handleStartAnalysis} />
+                    ) : (
+                        <AnalyzerTab
+                            sentenceData={sentenceData}
+                            onBackToEditor={() => setActiveTab('editor')}
+                        />
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(
+            <ErrorBoundary>
+                <App />
+            </ErrorBoundary>
+        );
+    </script>
+</body>
+</html>
